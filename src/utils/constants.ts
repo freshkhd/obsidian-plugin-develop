@@ -1,12 +1,22 @@
-import {ColumnDef, KanbanData, ReferenceData, ReferenceTab} from '../types';
+import {ColumnDef, ColumnId, KanbanData, ReferenceData, ReferenceTab} from '../types';
 
 export const VIEW_TYPE_KANBAN = 'scenario-kanban-dashboard';
 
 export const COLUMN_DEFS: ColumnDef[] = [
-	{id: 'ideas', displayName: '💡 아이디어', placeholder: '[[노트 제목]] 입력 후 Enter'},
-	{id: 'plot-development', displayName: '🗺️ 플롯 개발', placeholder: '[[노트 제목]] 입력 후 Enter'},
-	{id: 'project', displayName: '🎬 프로젝트', placeholder: '[[노트 제목]] 입력 후 Enter'},
+	{id: 'ideas',           displayName: '💡 Ideas',            placeholder: '[[Note Title]] or plain text + Enter'},
+	{id: 'plot-development', displayName: '🗺️ Plot Development', placeholder: '[[Note Title]] or plain text + Enter'},
+	{id: 'project',         displayName: '🎬 Project',           placeholder: '[[Note Title]] or plain text + Enter'},
 ];
+
+/** Default display names for the three pipeline columns */
+export const DEFAULT_COLUMN_NAMES: Record<ColumnId, string> = {
+	'ideas':            '💡 Ideas',
+	'plot-development': '🗺️ Plot Development',
+	'project':          '🎬 Project',
+};
+
+/** Default title shown at the top of the reference panel */
+export const DEFAULT_REF_PANEL_TITLE = '📋 References';
 
 export const DEFAULT_KANBAN_DATA: KanbanData = {
 	columns: {
@@ -16,13 +26,13 @@ export const DEFAULT_KANBAN_DATA: KanbanData = {
 	},
 };
 
-/** 최초 실행 시 기본으로 생성되는 탭 목록 */
+/** Default tabs created on first launch */
 export const DEFAULT_REFERENCE_TABS: ReferenceTab[] = [
-	{id: 'characters',   displayName: '캐릭터',     icon: '📁'},
-	{id: 'settings',     displayName: '설정',        icon: '📁'},
-	{id: 'story-beats',  displayName: '스토리 비트', icon: '📁'},
-	{id: 'scenes',       displayName: '장면',        icon: '📁'},
-	{id: 'dialogues',    displayName: '대사',         icon: '📁'},
+	{id: 'characters',  displayName: 'Characters',  icon: '📁'},
+	{id: 'settings',    displayName: 'World',        icon: '📁'},
+	{id: 'story-beats', displayName: 'Story Beats',  icon: '📁'},
+	{id: 'scenes',      displayName: 'Scenes',       icon: '📁'},
+	{id: 'dialogues',   displayName: 'Dialogue',     icon: '📁'},
 ];
 
 export const DEFAULT_REFERENCE_DATA: ReferenceData = {

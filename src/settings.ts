@@ -1,12 +1,18 @@
-import {KanbanData, ReferenceData} from './types';
-import {DEFAULT_KANBAN_DATA, DEFAULT_REFERENCE_DATA} from './utils/constants';
+import {ColumnId, KanbanData, ReferenceData} from './types';
+import {DEFAULT_COLUMN_NAMES, DEFAULT_KANBAN_DATA, DEFAULT_REFERENCE_DATA, DEFAULT_REF_PANEL_TITLE} from './utils/constants';
 
 export interface ScenarioPluginSettings {
 	kanban: KanbanData;
 	reference: ReferenceData;
+	/** User-editable display name for each pipeline column */
+	columnNames: Record<ColumnId, string>;
+	/** User-editable title for the reference panel header */
+	refPanelTitle: string;
 }
 
 export const DEFAULT_SETTINGS: ScenarioPluginSettings = {
 	kanban: DEFAULT_KANBAN_DATA,
 	reference: DEFAULT_REFERENCE_DATA,
+	columnNames: {...DEFAULT_COLUMN_NAMES},
+	refPanelTitle: DEFAULT_REF_PANEL_TITLE,
 };

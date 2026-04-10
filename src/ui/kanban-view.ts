@@ -79,7 +79,7 @@ export class KanbanView extends ItemView {
 
 	private renderColumn(parent: HTMLElement, colDef: ColumnDef): void {
 		const columnEl = parent.createDiv({cls: 'kanban-column'});
-		columnEl.createEl('h3', {text: colDef.displayName, cls: 'kanban-column-title'});
+		columnEl.createEl('h3', {text: this.plugin.settings.columnNames[colDef.id] ?? colDef.displayName, cls: 'kanban-column-title'});
 
 		const inputEl = columnEl.createEl('input', {
 			cls: 'kanban-input',
@@ -222,7 +222,7 @@ export class KanbanView extends ItemView {
 		});
 		if (!this.panelOpen) return;
 
-		panelEl.createEl('h3', {text: '📋 참고자료', cls: 'ref-panel-title'});
+		panelEl.createEl('h3', {text: this.plugin.settings.refPanelTitle, cls: 'ref-panel-title'});
 		this.renderTabBar(panelEl);
 
 		if (this.activeTabId) {

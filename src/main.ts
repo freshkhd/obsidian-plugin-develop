@@ -1,7 +1,8 @@
 import {Plugin, TFile} from 'obsidian';
 import {DEFAULT_SETTINGS, ScenarioPluginSettings} from './settings';
 import {KanbanView} from './ui/kanban-view';
-import {DEFAULT_KANBAN_DATA, DEFAULT_REFERENCE_DATA, DEFAULT_REFERENCE_TABS, VIEW_TYPE_KANBAN} from './utils/constants';
+import {ScenarioSettingTab} from './ui/settings-tab';
+import {COLUMN_DEFS, DEFAULT_COLUMN_NAMES, DEFAULT_KANBAN_DATA, DEFAULT_REFERENCE_DATA, DEFAULT_REFERENCE_TABS, DEFAULT_REF_PANEL_TITLE, VIEW_TYPE_KANBAN} from './utils/constants';
 import {ColumnId, KanbanItem} from './types';
 
 export default class ScenarioPlugin extends Plugin {
@@ -24,6 +25,8 @@ export default class ScenarioPlugin extends Plugin {
 			name: 'Open dashboard',
 			callback: () => this.activateView(),
 		});
+
+		this.addSettingTab(new ScenarioSettingTab(this.app, this));
 
 		// 노트 이름이 변경되면 칸반 + 참고자료 데이터 자동 동기화
 		this.registerEvent(
@@ -63,6 +66,13 @@ export default class ScenarioPlugin extends Plugin {
 				}
 			})
 		);
+	}
+
+	/** Re-render all open dashboard leaves (called after settings change). */
+	refreshViews(): void {
+		this.app.workspace.getLeavesOfType(VIEW_TYPE_KANBAN).forEach(leaf => {
+			(leaf.view as KanbanView).refresh();
+		});
 	}
 
 	async activateView() {
@@ -114,6 +124,23 @@ export default class ScenarioPlugin extends Plugin {
 			if (!this.settings.reference.items[tab.id]) {
 				this.settings.reference.items[tab.id] = [];
 			}
+		}
+
+		// ── 컬럼 이름 초기화 + 마이그레이션 ────────────────────────────
+		if (!this.settings.columnNames) {
+			this.settings.columnNames = {...DEFAULT_COLUMN_NAMES};
+		} else {
+			// 누락된 컬럼 보정
+			for (const colDef of COLUMN_DEFS) {
+				if (!this.settings.columnNames[colDef.id]) {
+					this.settings.columnNames[colDef.id] = DEFAULT_COLUMN_NAMES[colDef.id];
+				}
+			}
+		}
+
+		// ── 참고자료 패널 제목 초기화 ────────────────────────────────────
+		if (!this.settings.refPanelTitle) {
+			this.settings.refPanelTitle = DEFAULT_REF_PANEL_TITLE;
 		}
 	}
 
