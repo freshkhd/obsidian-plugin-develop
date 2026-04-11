@@ -158,8 +158,9 @@ export class KanbanView extends ItemView {
 				if (kanbanRaw) { await this.moveKanbanToColumn(JSON.parse(kanbanRaw) as KanbanDragPayload, colDef.id); return; }
 				const refRaw = dt.getData(DRAG_TYPE_REFERENCE);
 				if (refRaw) { await this.addKanbanItem(colDef.id, (JSON.parse(refRaw) as ReferenceDragPayload).noteTitle); return; }
-				const title = this.extractNoteTitleFromDrop(e);
-				if (title) await this.addKanbanItem(colDef.id, title);
+				for (const title of this.extractNoteTitlesFromDrop(e)) {
+					await this.addKanbanItem(colDef.id, title);
+				}
 			})();
 		});
 	}
@@ -220,10 +221,12 @@ export class KanbanView extends ItemView {
 					else         await this.addKanbanItem(columnId, p.noteTitle);
 					return;
 				}
-				const title = this.extractNoteTitleFromDrop(e);
-				if (!title) return;
-				if (isChild) await this.addKanbanChildItem(columnId, item, title);
-				else         await this.addKanbanItem(columnId, title);
+				const titles = this.extractNoteTitlesFromDrop(e);
+				if (titles.length === 0) return;
+				for (const title of titles) {
+					if (isChild) await this.addKanbanChildItem(columnId, item, title);
+					else         await this.addKanbanItem(columnId, title);
+				}
 			})();
 		});
 
@@ -524,11 +527,14 @@ export class KanbanView extends ItemView {
 				contentEl.removeClass('ref-content-dragover');
 		});
 		contentEl.addEventListener('drop', (e: DragEvent) => {
-			e.preventDefault();
-			contentEl.removeClass('ref-content-dragover');
-			if ((e.target as HTMLElement).closest('.ref-item')) return;
-			const title = this.extractNoteTitleFromDrop(e);
-			if (title) void this.addRefItem(tabId, title);
+			void (async () => {
+				e.preventDefault();
+				contentEl.removeClass('ref-content-dragover');
+				if ((e.target as HTMLElement).closest('.ref-item')) return;
+				for (const title of this.extractNoteTitlesFromDrop(e)) {
+					await this.addRefItem(tabId, title);
+				}
+			})();
 		});
 	}
 
@@ -569,24 +575,48 @@ export class KanbanView extends ItemView {
 			.forEach(el => el.classList.remove('ref-tab-drag-before', 'ref-tab-drag-after'));
 	}
 
-	private extractNoteTitleFromDrop(e: DragEvent): string | null {
+	/**
+	 * 드래그 이벤트에서 노트 제목 배열을 추출한다.
+	 * 파일 탐색기에서 여러 노트를 동시에 드래그하면
+	 * text/plain에 "[[제목1]]\n[[제목2]]\n..." 형태로 전달되므로
+	 * 정규식으로 개별 파싱하여 배열로 반환한다.
+	 */
+	private extractNoteTitlesFromDrop(e: DragEvent): string[] {
 		const dt = e.dataTransfer;
-		if (!dt) return null;
+		if (!dt) return [];
+
 		const textData = dt.getData('text/plain');
 		if (textData) {
-			let title: string;
+			// obsidian:// 단일 URI (파일 탐색기 단일 선택)
 			if (textData.startsWith('obsidian://')) {
 				const url = new URL(textData);
 				const fp = url.searchParams.get('file');
-				if (!fp) return null;
-				title = decodeURIComponent(fp);
-			} else {
-				title = textData.replace(/^\[\[/, '').replace(/\]\]$/, '');
+				if (!fp) return [];
+				const title = decodeURIComponent(fp).replace(/\.md$/i, '').trim();
+				return title ? [title] : [];
 			}
-			return title.replace(/\.md$/i, '').trim() || null;
+
+			// [[제목]] 패턴을 모두 추출 (다중 선택 드래그 대응)
+			const matches = [...textData.matchAll(/\[\[([^\]]+)\]\]/g)];
+			if (matches.length > 0) {
+				return matches
+					.map(m => (m[1] ?? '').replace(/\.md$/i, '').trim())
+					.filter(Boolean);
+			}
+
+			// 폴백: [[]] 없는 plain text 한 줄
+			const title = textData.replace(/\.md$/i, '').trim();
+			return title ? [title] : [];
 		}
-		if (dt.files?.length) return (dt.files[0]?.name ?? '').replace(/\.md$/i, '').trim() || null;
-		return null;
+
+		// Windows 탐색기에서 파일 드래그
+		if (dt.files?.length) {
+			return Array.from(dt.files)
+				.map(f => f.name.replace(/\.md$/i, '').trim())
+				.filter(Boolean);
+		}
+
+		return [];
 	}
 
 	// ═══════════════════════════════════════════════════════════════════
