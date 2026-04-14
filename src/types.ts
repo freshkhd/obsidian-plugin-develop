@@ -4,7 +4,36 @@ export interface KanbanItem {
 	children?: KanbanItem[];
 }
 
-export type ColumnId = 'ideas' | 'plot-development' | 'project';
+export type ColumnId = 'ideas' | 'step-outline' | 'plot-development' | 'treatment' | 'project';
+
+// ── 멀티 뷰 ──────────────────────────────────────────────────────────────
+export type DashboardViewKind = 'story' | 'gantt';
+
+// ── 간트 차트 ─────────────────────────────────────────────────────────────
+
+export type GanttTaskStatus = 'planned' | 'in-progress' | 'done';
+
+export interface GanttTask {
+	id: string;
+	title: string;
+	startDate: string;   // 'YYYY-MM-DD'
+	endDate: string;     // 'YYYY-MM-DD' (inclusive)
+	progress: number;    // 0..100
+	status: GanttTaskStatus;
+}
+
+export type GanttAccent = 'tertiary' | 'secondary' | 'muted';
+
+export interface GanttPhase {
+	id: string;
+	displayName: string;
+	accent: GanttAccent;
+}
+
+export interface GanttData {
+	phases: GanttPhase[];
+	tasks: Record<string, GanttTask[]>;  // key = GanttPhase.id
+}
 
 export interface KanbanData {
 	columns: Record<ColumnId, KanbanItem[]>;

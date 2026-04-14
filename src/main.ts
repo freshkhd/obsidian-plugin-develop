@@ -1,8 +1,8 @@
 import {Plugin, TFile} from 'obsidian';
 import {DEFAULT_SETTINGS, ScenarioPluginSettings} from './settings';
-import {KanbanView} from './ui/kanban-view';
+import {DashboardView} from './ui/dashboard-view';
 import {ScenarioSettingTab} from './ui/settings-tab';
-import {COLUMN_DEFS, DEFAULT_COLUMN_NAMES, DEFAULT_KANBAN_DATA, DEFAULT_REFERENCE_DATA, DEFAULT_REFERENCE_TABS, DEFAULT_REF_PANEL_EMOJI, DEFAULT_REF_PANEL_TITLE, VIEW_TYPE_KANBAN} from './utils/constants';
+import {COLUMN_DEFS, DEFAULT_COLUMN_NAMES, DEFAULT_GANTT_DATA, DEFAULT_GANTT_PHASES, DEFAULT_GANTT_SCALE, DEFAULT_KANBAN_DATA, DEFAULT_LAST_VIEW, DEFAULT_REFERENCE_DATA, DEFAULT_REFERENCE_TABS, DEFAULT_REF_PANEL_EMOJI, DEFAULT_REF_PANEL_TITLE, VIEW_TYPE_KANBAN} from './utils/constants';
 import {ColumnId, KanbanItem} from './types';
 
 export default class ScenarioPlugin extends Plugin {
@@ -13,7 +13,7 @@ export default class ScenarioPlugin extends Plugin {
 
 		this.registerView(
 			VIEW_TYPE_KANBAN,
-			(leaf) => new KanbanView(leaf, this)
+			(leaf) => new DashboardView(leaf, this)
 		);
 
 		this.addRibbonIcon('layout-dashboard', '시나리오 대시보드 열기', () => {
@@ -61,7 +61,7 @@ export default class ScenarioPlugin extends Plugin {
 				if (changed) {
 					void this.saveSettings();
 					this.app.workspace.getLeavesOfType(VIEW_TYPE_KANBAN).forEach(leaf => {
-						(leaf.view as KanbanView).refresh();
+						(leaf.view as DashboardView).refresh();
 					});
 				}
 			})
@@ -71,7 +71,7 @@ export default class ScenarioPlugin extends Plugin {
 	/** Re-render all open dashboard leaves (called after settings change). */
 	refreshViews(): void {
 		this.app.workspace.getLeavesOfType(VIEW_TYPE_KANBAN).forEach(leaf => {
-			(leaf.view as KanbanView).refresh();
+			(leaf.view as DashboardView).refresh();
 		});
 	}
 
@@ -91,7 +91,7 @@ export default class ScenarioPlugin extends Plugin {
 
 		// ── 칸반 초기화 ────────────────────────────────────────────────
 		if (!this.settings.kanban) this.settings.kanban = DEFAULT_KANBAN_DATA;
-		const columnIds: ColumnId[] = ['ideas', 'plot-development', 'project'];
+		const columnIds: ColumnId[] = ['ideas', 'step-outline', 'plot-development', 'treatment', 'project'];
 		for (const colId of columnIds) {
 			if (!this.settings.kanban.columns[colId]) {
 				this.settings.kanban.columns[colId] = [];
@@ -132,6 +132,7 @@ export default class ScenarioPlugin extends Plugin {
 		} else {
 			for (const colDef of COLUMN_DEFS) {
 				if (!this.settings.columnNames[colDef.id]) {
+					// 신규 컬럼(step-outline, treatment)은 기본값으로 채움
 					this.settings.columnNames[colDef.id] = DEFAULT_COLUMN_NAMES[colDef.id];
 				} else {
 					// 구버전: 이모지가 포함된 값이면 이모지 접두사 제거
@@ -139,6 +140,16 @@ export default class ScenarioPlugin extends Plugin {
 					if (stored.startsWith(colDef.emoji)) {
 						this.settings.columnNames[colDef.id] = stored.slice(colDef.emoji.length).trimStart() || DEFAULT_COLUMN_NAMES[colDef.id];
 					}
+				}
+			}
+			// 구 기본값 → 새 기본값 자동 교체 (사용자가 직접 수정한 라벨은 유지)
+			const legacyMap: Partial<Record<ColumnId, {was: string; now: string}>> = {
+				'plot-development': {was: 'Plot Development', now: 'Plot'},
+				'project':          {was: 'Project',          now: 'Scenario'},
+			};
+			for (const [id, m] of Object.entries(legacyMap) as [ColumnId, {was: string; now: string}][]) {
+				if (this.settings.columnNames[id] === m.was) {
+					this.settings.columnNames[id] = m.now;
 				}
 			}
 		}
@@ -150,6 +161,21 @@ export default class ScenarioPlugin extends Plugin {
 			// 구버전: 이모지가 포함된 값이면 제거
 			this.settings.refPanelTitle = this.settings.refPanelTitle.slice(DEFAULT_REF_PANEL_EMOJI.length).trimStart() || DEFAULT_REF_PANEL_TITLE;
 		}
+
+		// ── 간트 초기화 ────────────────────────────────────────────────
+		if (!this.settings.gantt) {
+			this.settings.gantt = {
+				phases: DEFAULT_GANTT_PHASES.map(p => ({...p})),
+				tasks:  Object.fromEntries(DEFAULT_GANTT_PHASES.map(p => [p.id, []])),
+			};
+		}
+		if (!this.settings.gantt.phases) this.settings.gantt.phases = DEFAULT_GANTT_PHASES.map(p => ({...p}));
+		if (!this.settings.gantt.tasks)  this.settings.gantt.tasks  = {};
+		for (const phase of this.settings.gantt.phases) {
+			if (!this.settings.gantt.tasks[phase.id]) this.settings.gantt.tasks[phase.id] = [];
+		}
+		if (!this.settings.lastActiveView) this.settings.lastActiveView = DEFAULT_LAST_VIEW;
+		if (!this.settings.ganttScale)     this.settings.ganttScale     = DEFAULT_GANTT_SCALE;
 	}
 
 	async saveSettings() {

@@ -1,6 +1,7 @@
-import {App, PluginSettingTab, Setting} from 'obsidian';
+import {App, Notice, PluginSettingTab, Setting} from 'obsidian';
 import type ScenarioPlugin from '../main';
-import {COLUMN_DEFS, DEFAULT_COLUMN_NAMES, DEFAULT_REF_PANEL_EMOJI, DEFAULT_REF_PANEL_TITLE} from '../utils/constants';
+import {COLUMN_DEFS, DEFAULT_COLUMN_NAMES, DEFAULT_GANTT_PHASES, DEFAULT_REF_PANEL_EMOJI, DEFAULT_REF_PANEL_TITLE} from '../utils/constants';
+import {GanttAccent} from '../types';
 
 export class ScenarioSettingTab extends PluginSettingTab {
 	plugin: ScenarioPlugin;
@@ -50,6 +51,53 @@ export class ScenarioSettingTab extends PluginSettingTab {
 					});
 			});
 
+		// ── Timeline / Gantt ────────────────────────────────────────────
+		new Setting(containerEl).setName('Timeline / Gantt').setHeading();
+
+		new Setting(containerEl)
+			.setName('Phases')
+			.setDesc('Manage the phase sections shown in the Gantt view. Double-click a phase name in the view to rename it inline.');
+
+		const phasesContainer = containerEl.createDiv({cls: 'gantt-settings-phases'});
+		this.renderPhaseList(phasesContainer);
+
+		new Setting(containerEl)
+			.setName('Add phase')
+			.addButton(btn => {
+				btn.setButtonText('+ Add phase').onClick(() => {
+					const accents: GanttAccent[] = ['tertiary', 'secondary', 'muted'];
+					const idx = this.plugin.settings.gantt.phases.length;
+					const accent = accents[idx % accents.length] ?? 'muted';
+					const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+					this.plugin.settings.gantt.phases.push({id, displayName: 'New Phase', accent});
+					this.plugin.settings.gantt.tasks[id] = [];
+					void this.plugin.saveSettings();
+					this.plugin.refreshViews();
+					this.display();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Reset phases to defaults')
+			.addButton(btn => {
+				btn.setButtonText('Reset phases').onClick(() => {
+					this.plugin.settings.gantt.phases = DEFAULT_GANTT_PHASES.map(p => ({...p}));
+					// 기본 페이즈 외 태스크는 유지하지 않음
+					const defaultIds = new Set(DEFAULT_GANTT_PHASES.map(p => p.id));
+					for (const id of Object.keys(this.plugin.settings.gantt.tasks)) {
+						if (!defaultIds.has(id)) delete this.plugin.settings.gantt.tasks[id];
+					}
+					for (const phase of DEFAULT_GANTT_PHASES) {
+						if (!this.plugin.settings.gantt.tasks[phase.id]) {
+							this.plugin.settings.gantt.tasks[phase.id] = [];
+						}
+					}
+					void this.plugin.saveSettings();
+					this.plugin.refreshViews();
+					this.display();
+				});
+			});
+
 		// ── Reset ───────────────────────────────────────────────────────
 		new Setting(containerEl).setName('Reset').setHeading();
 
@@ -69,5 +117,60 @@ export class ScenarioSettingTab extends PluginSettingTab {
 						this.display();
 					});
 			});
+	}
+
+	private renderPhaseList(container: HTMLElement): void {
+		container.empty();
+		const phases = this.plugin.settings.gantt.phases;
+
+		for (let i = 0; i < phases.length; i++) {
+			const phase = phases[i]!;
+			const row = new Setting(container)
+				.setName(phase.displayName)
+				.addText(text => {
+					text.setValue(phase.displayName)
+						.setPlaceholder('Phase name')
+						.onChange(value => {
+							phase.displayName = value.trim() || phase.displayName;
+							void this.plugin.saveSettings();
+							this.plugin.refreshViews();
+						});
+				})
+				.addButton(btn => {
+					btn.setButtonText('↑').setDisabled(i === 0).onClick(() => {
+						phases.splice(i - 1, 0, phases.splice(i, 1)[0]!);
+						void this.plugin.saveSettings();
+						this.plugin.refreshViews();
+						this.renderPhaseList(container);
+					});
+				})
+				.addButton(btn => {
+					btn.setButtonText('↓').setDisabled(i === phases.length - 1).onClick(() => {
+						phases.splice(i + 1, 0, phases.splice(i, 1)[0]!);
+						void this.plugin.saveSettings();
+						this.plugin.refreshViews();
+						this.renderPhaseList(container);
+					});
+				})
+				.addButton(btn => {
+					btn.setButtonText('Delete').setWarning().onClick(() => {
+						if (phases.length <= 1) {
+							new Notice('At least one phase is required.');
+							return;
+						}
+						const tasks = this.plugin.settings.gantt.tasks[phase.id] ?? [];
+						if (tasks.length > 0) {
+							if (!confirm(`"${phase.displayName}" has ${tasks.length} task(s). Delete phase and all its tasks?`)) return;
+						}
+						phases.splice(i, 1);
+						delete this.plugin.settings.gantt.tasks[phase.id];
+						void this.plugin.saveSettings();
+						this.plugin.refreshViews();
+						this.renderPhaseList(container);
+					});
+				});
+
+			void row;
+		}
 	}
 }

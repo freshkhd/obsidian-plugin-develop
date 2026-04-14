@@ -1,7 +1,7 @@
 import {App, ItemView, Modal, Notice, WorkspaceLeaf} from 'obsidian';
 import type ScenarioPlugin from '../main';
-import {ColumnDef, ColumnId, KanbanItem, ReferenceTab} from '../types';
-import {COLUMN_DEFS, DEFAULT_REF_PANEL_EMOJI, DEFAULT_REF_PANEL_TITLE, VIEW_TYPE_KANBAN} from '../utils/constants';
+import {ColumnDef, ColumnId, DashboardViewKind, GanttPhase, GanttTask, GanttTaskStatus, KanbanItem, ReferenceTab} from '../types';
+import {COLUMN_DEFS, DEFAULT_GANTT_PHASES, DEFAULT_REF_PANEL_EMOJI, DEFAULT_REF_PANEL_TITLE, GANTT_SCALE_PX, VIEW_TYPE_KANBAN} from '../utils/constants';
 
 // ── 드래그 페이로드 ───────────────────────────────────────────────────
 
@@ -20,25 +20,83 @@ const DRAG_TYPE_KANBAN    = 'application/x-kanban-item';
 const DRAG_TYPE_REFERENCE = 'application/x-reference-item';
 const DRAG_TYPE_REF_TAB   = 'application/x-reference-tab';
 
-// ── 탭 ID 생성 ────────────────────────────────────────────────────────
+// ── ID 생성 유틸 ──────────────────────────────────────────────────────
 
-function generateTabId(): string {
+function generateId(): string {
 	return Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+}
+
+// ── 날짜 유틸 ─────────────────────────────────────────────────────────
+
+/** 두 날짜 사이의 일수 차 (b - a) */
+function diffDays(a: string, b: string): number {
+	const msA = new Date(a).getTime();
+	const msB = new Date(b).getTime();
+	return Math.round((msB - msA) / 86400000);
+}
+
+function todayStr(): string {
+	return new Date().toISOString().slice(0, 10);
+}
+
+function addDaysStr(dateStr: string, days: number): string {
+	const d = new Date(dateStr);
+	d.setDate(d.getDate() + days);
+	return d.toISOString().slice(0, 10);
+}
+
+function formatMonthLabel(dateStr: string): string {
+	const d = new Date(dateStr);
+	return d.toLocaleString('en-US', {month: 'long', year: 'numeric'}).toUpperCase();
+}
+
+function getWeekNumber(dateStr: string): number {
+	const d = new Date(dateStr);
+	const startOfYear = new Date(d.getFullYear(), 0, 1);
+	return Math.ceil(((d.getTime() - startOfYear.getTime()) / 86400000 + startOfYear.getDay() + 1) / 7);
+}
+
+function formatDayLabel(dateStr: string): string {
+	return String(new Date(dateStr).getDate());
+}
+
+/** YYYY-MM-DD의 월요일을 구한다 */
+function getMonday(dateStr: string): string {
+	const d = new Date(dateStr);
+	const day = d.getDay();
+	const diff = (day === 0 ? -6 : 1 - day);
+	d.setDate(d.getDate() + diff);
+	return d.toISOString().slice(0, 10);
+}
+
+/** 월의 첫날 YYYY-MM-01 */
+function getMonthStart(dateStr: string): string {
+	return dateStr.slice(0, 8) + '01';
+}
+
+/** 다음 달 첫날 */
+function getNextMonthStart(dateStr: string): string {
+	const d = new Date(dateStr);
+	d.setMonth(d.getMonth() + 1, 1);
+	return d.toISOString().slice(0, 10);
 }
 
 // ═════════════════════════════════════════════════════════════════════════
 
-export class KanbanView extends ItemView {
+export class DashboardView extends ItemView {
 	plugin: ScenarioPlugin;
 
+	// ── 칸반/참고자료 뷰 로컬 상태 ───────────────────────────────────
 	private activeTabId    = '';
 	private panelOpen      = true;
-	/** 인라인 편집 중인 탭 ID (null이면 편집 없음) */
-	private editingTabId:  string | null  = null;
-	/** 인라인 편집 중인 칸반 컬럼 ID (null이면 편집 없음) */
-	private editingColId:  ColumnId | null = null;
-	/** 참고자료 패널 제목 인라인 편집 중 여부 */
+	private editingTabId:   string | null  = null;
+	private editingColId:   ColumnId | null = null;
 	private editingRefTitle = false;
+
+	// ── 간트 뷰 로컬 상태 ─────────────────────────────────────────────
+	private ganttEditingTaskId: string | null = null;
+	private ganttEditingPhaseId: string | null = null;
+	private ganttNewTaskPhaseId: string | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: ScenarioPlugin) {
 		super(leaf);
@@ -54,7 +112,7 @@ export class KanbanView extends ItemView {
 	refresh()       { this.renderBoard(); }
 
 	// ═══════════════════════════════════════════════════════════════════
-	// Board 루트
+	// 루트 렌더
 	// ═══════════════════════════════════════════════════════════════════
 
 	private renderBoard(): void {
@@ -65,26 +123,75 @@ export class KanbanView extends ItemView {
 		}
 
 		this.contentEl.empty();
-		const wrapperEl = this.contentEl.createDiv({cls: 'kanban-wrapper'});
+		const root = this.contentEl.createDiv({cls: 'dashboard-root'});
 
-		// 좌측 칸반 보드
+		this.renderNav(root);
+
+		const body = root.createDiv({cls: 'dashboard-body'});
+		const view = this.plugin.settings.lastActiveView;
+		if (view === 'gantt') {
+			this.renderGanttBody(body);
+		} else {
+			this.renderStoryBody(body);
+		}
+	}
+
+	// ── 좌측 네비게이션 ───────────────────────────────────────────────
+
+	private renderNav(root: HTMLElement): void {
+		const nav = root.createDiv({cls: 'dashboard-nav'});
+
+		const header = nav.createDiv({cls: 'dashboard-nav-header'});
+		header.createDiv({cls: 'dashboard-nav-logo', text: '🎬'});
+		const hText = header.createDiv({cls: 'dashboard-nav-header-text'});
+		hText.createDiv({cls: 'dashboard-nav-title', text: 'Scenario'});
+		hText.createDiv({cls: 'dashboard-nav-subtitle', text: 'Dashboard'});
+
+		const items = nav.createDiv({cls: 'dashboard-nav-items'});
+		const current = this.plugin.settings.lastActiveView;
+
+		const navItems: Array<{id: DashboardViewKind; icon: string; label: string}> = [
+			{id: 'story', icon: '📖', label: 'Story'},
+			{id: 'gantt', icon: '📊', label: 'Timeline/Gantt'},
+		];
+
+		for (const ni of navItems) {
+			const el = items.createDiv({
+				cls: ni.id === current
+					? 'dashboard-nav-item dashboard-nav-item-active'
+					: 'dashboard-nav-item',
+			});
+			el.createSpan({cls: 'dashboard-nav-item-icon', text: ni.icon});
+			el.createSpan({cls: 'dashboard-nav-item-label', text: ni.label});
+			el.addEventListener('click', () => {
+				if (this.plugin.settings.lastActiveView === ni.id) return;
+				this.plugin.settings.lastActiveView = ni.id;
+				void this.plugin.saveSettings();
+				this.renderBoard();
+			});
+		}
+	}
+
+	// ── Story 뷰 (칸반 + 참고자료) ────────────────────────────────────
+
+	private renderStoryBody(body: HTMLElement): void {
+		const wrapperEl = body.createDiv({cls: 'kanban-wrapper'});
+
 		const boardEl = wrapperEl.createDiv({cls: 'kanban-board'});
 		for (const colDef of COLUMN_DEFS) {
 			this.renderColumn(boardEl, colDef);
 		}
 
-		// 우측 참고자료 패널
 		this.renderReferencePanel(wrapperEl);
 	}
 
 	// ═══════════════════════════════════════════════════════════════════
-	// Kanban Column & Item (기존 로직 유지)
+	// Kanban Column & Item
 	// ═══════════════════════════════════════════════════════════════════
 
 	private renderColumn(parent: HTMLElement, colDef: ColumnDef): void {
 		const columnEl = parent.createDiv({cls: 'kanban-column'});
 
-		// ── 컬럼 제목 (더블클릭으로 인라인 편집 / 이모지는 고정) ──────
 		if (this.editingColId === colDef.id) {
 			const editRow = columnEl.createDiv({cls: 'kanban-column-title-edit'});
 			editRow.createSpan({text: colDef.emoji, cls: 'kanban-column-title-emoji'});
@@ -257,7 +364,7 @@ export class KanbanView extends ItemView {
 		toggleBtn.createSpan({text: this.panelOpen ? '📂' : '📁'});
 		toggleBtn.addEventListener('click', () => {
 			this.panelOpen = !this.panelOpen;
-			this.editingRefTitle = false; // 패널 토글 시 편집 취소
+			this.editingRefTitle = false;
 			this.renderBoard();
 		});
 
@@ -266,7 +373,6 @@ export class KanbanView extends ItemView {
 		});
 		if (!this.panelOpen) return;
 
-		// ── 패널 제목 (더블클릭으로 인라인 편집 / 이모지는 고정) ──────
 		if (this.editingRefTitle) {
 			const editRow = panelEl.createDiv({cls: 'ref-panel-title-edit'});
 			editRow.createSpan({text: DEFAULT_REF_PANEL_EMOJI, cls: 'ref-panel-title-emoji'});
@@ -306,8 +412,6 @@ export class KanbanView extends ItemView {
 		}
 	}
 
-	// ── 탭 바 ──────────────────────────────────────────────────────────
-
 	private renderTabBar(panelEl: HTMLElement): void {
 		const tabBarEl = panelEl.createDiv({cls: 'ref-tabs'});
 		const tabs = this.plugin.settings.reference.customTabs;
@@ -320,14 +424,13 @@ export class KanbanView extends ItemView {
 			}
 		}
 
-		// "+" 새 탭 버튼
 		const addBtn = tabBarEl.createDiv({cls: 'ref-tab ref-tab-add'});
 		addBtn.setText('+');
 		addBtn.setAttribute('aria-label', '새 탭 추가');
 		addBtn.addEventListener('click', () => {
 			void (async () => {
 				const newTab: ReferenceTab = {
-					id: generateTabId(),
+					id: generateId(),
 					displayName: '새 탭',
 					icon: '📁',
 				};
@@ -335,19 +438,17 @@ export class KanbanView extends ItemView {
 				this.plugin.settings.reference.items[newTab.id] = [];
 				await this.plugin.saveSettings();
 				this.activeTabId  = newTab.id;
-				this.editingTabId = newTab.id; // 생성 즉시 편집 모드
+				this.editingTabId = newTab.id;
 				this.renderBoard();
 			})();
 		});
 	}
 
-	/** 일반 탭 칩 렌더링 */
 	private renderTabChip(parent: HTMLElement, tab: ReferenceTab): void {
 		const tabEl = parent.createDiv({
 			cls: tab.id === this.activeTabId ? 'ref-tab ref-tab-active' : 'ref-tab',
 		});
 
-		// ── 드래그 소스 ─────────────────────────────────────────────
 		tabEl.setAttribute('draggable', 'true');
 		tabEl.addEventListener('dragstart', (e: DragEvent) => {
 			e.dataTransfer?.setData(DRAG_TYPE_REF_TAB, tab.id);
@@ -359,7 +460,6 @@ export class KanbanView extends ItemView {
 			this.clearTabDragIndicators();
 		});
 
-		// ── 드롭 타겟 ──────────────────────────────────────────────
 		tabEl.addEventListener('dragover', (e: DragEvent) => {
 			if (!e.dataTransfer?.types.includes(DRAG_TYPE_REF_TAB)) return;
 			e.preventDefault();
@@ -391,7 +491,6 @@ export class KanbanView extends ItemView {
 				const fromIdx = tabs.findIndex(t => t.id === draggedId);
 				if (fromIdx === -1) return;
 
-				// 원본 제거 후 남은 배열에서 대상 위치 찾아 삽입
 				const moved = tabs.splice(fromIdx, 1)[0];
 				if (!moved) return;
 				const newToIdx = tabs.findIndex(t => t.id === tab.id);
@@ -402,7 +501,6 @@ export class KanbanView extends ItemView {
 			})();
 		});
 
-		// ── 클릭 / 더블클릭 ────────────────────────────────────────
 		tabEl.addEventListener('click', () => {
 			this.activeTabId  = tab.id;
 			this.editingTabId = null;
@@ -415,10 +513,8 @@ export class KanbanView extends ItemView {
 			this.renderBoard();
 		});
 
-		// 아이콘은 📁으로 통일
 		tabEl.createSpan({text: `📁 ${tab.displayName}`, cls: 'ref-tab-label'});
 
-		// hover 시 표시되는 × 삭제 버튼
 		const deleteBtn = tabEl.createSpan({text: '×', cls: 'ref-tab-delete-btn'});
 		deleteBtn.addEventListener('click', (e: MouseEvent) => {
 			e.stopPropagation();
@@ -426,7 +522,6 @@ export class KanbanView extends ItemView {
 		});
 	}
 
-	/** 인라인 편집 폼 (이름만 수정, 이모지 없음) */
 	private renderTabEditForm(parent: HTMLElement, tab: ReferenceTab): void {
 		const formEl = parent.createDiv({cls: 'ref-tab-form'});
 
@@ -451,7 +546,6 @@ export class KanbanView extends ItemView {
 			void (async () => {
 				if (e.key === 'Enter')  { await doSave(); }
 				if (e.key === 'Escape') {
-					// 새 탭 취소 시 삭제
 					const isNew = this.plugin.settings.reference.customTabs.find(t => t.id === tab.id)?.displayName === '새 탭';
 					if (isNew) { void this.deleteTab(tab.id); return; }
 					this.editingTabId = null;
@@ -471,7 +565,6 @@ export class KanbanView extends ItemView {
 		setTimeout(() => { nameInput.select(); }, 0);
 	}
 
-	/** 탭 삭제 (데이터 포함) */
 	private async deleteTab(tabId: string): Promise<void> {
 		const tabs = this.plugin.settings.reference.customTabs;
 		if (tabs.length <= 1) {
@@ -482,15 +575,12 @@ export class KanbanView extends ItemView {
 		if (idx !== -1) tabs.splice(idx, 1);
 		delete this.plugin.settings.reference.items[tabId];
 		this.editingTabId = null;
-		// 활성 탭 보정
 		if (this.activeTabId === tabId) {
 			this.activeTabId = tabs[0]?.id ?? '';
 		}
 		await this.plugin.saveSettings();
 		this.renderBoard();
 	}
-
-	// ── 탭 콘텐츠 ─────────────────────────────────────────────────────
 
 	private renderTabContent(panelEl: HTMLElement, tabId: string): void {
 		const contentEl = panelEl.createDiv({cls: 'ref-tab-content'});
@@ -516,7 +606,6 @@ export class KanbanView extends ItemView {
 			this.renderRefItem(itemsEl, tabId, item);
 		}
 
-		// 파일 탐색기 드롭
 		contentEl.addEventListener('dragover', (e: DragEvent) => {
 			e.preventDefault();
 			if (!(e.target as HTMLElement).closest('.ref-item'))
@@ -562,6 +651,444 @@ export class KanbanView extends ItemView {
 	}
 
 	// ═══════════════════════════════════════════════════════════════════
+	// 간트 뷰
+	// ═══════════════════════════════════════════════════════════════════
+
+	private renderGanttBody(body: HTMLElement): void {
+		const wrapper = body.createDiv({cls: 'gantt-wrapper'});
+
+		// 헤더 툴바
+		this.renderGanttHeader(wrapper);
+
+		// 본문 (사이드바 + 타임라인)
+		const content = wrapper.createDiv({cls: 'gantt-content'});
+		const sidebar  = content.createDiv({cls: 'gantt-sidebar'});
+		const timeline = content.createDiv({cls: 'gantt-timeline'});
+
+		const phases  = this.plugin.settings.gantt.phases;
+		const scale   = this.plugin.settings.ganttScale;
+		const pxPerDay = GANTT_SCALE_PX[scale];
+
+		// 날짜 범위 계산
+		const range = this.computeGanttDateRange();
+		const totalDays = diffDays(range.start, range.end) + 1;
+		const timelineWidth = totalDays * pxPerDay;
+
+		// ── 타임라인 헤더 (월) ────────────────────────────────────
+		const tlHeader = timeline.createDiv({cls: 'gantt-timeline-header'});
+		tlHeader.style.minWidth = `${timelineWidth}px`;
+
+		// ── 타임라인 서브헤더 (주/일) ─────────────────────────────
+		const tlSubheader = timeline.createDiv({cls: 'gantt-timeline-subheader'});
+		tlSubheader.style.minWidth = `${timelineWidth}px`;
+
+		if (scale === 'monthly') {
+			this.renderMonthlyHeader(tlHeader, tlSubheader, range, pxPerDay, totalDays);
+		} else if (scale === 'weekly') {
+			this.renderWeeklyHeader(tlHeader, tlSubheader, range, pxPerDay, totalDays);
+		} else {
+			this.renderDailyHeader(tlHeader, tlSubheader, range, pxPerDay, totalDays);
+		}
+
+		// ── 바 컨테이너 ───────────────────────────────────────────
+		const barsArea = timeline.createDiv({cls: 'gantt-bars'});
+		barsArea.style.minWidth = `${timelineWidth}px`;
+		barsArea.style.position = 'relative';
+
+		// "오늘" 인디케이터
+		const todayOffset = diffDays(range.start, todayStr());
+		if (todayOffset >= 0 && todayOffset <= totalDays) {
+			const todayLine = barsArea.createDiv({cls: 'gantt-today-line'});
+			todayLine.style.left = `${todayOffset * pxPerDay}px`;
+			const dot = todayLine.createDiv({cls: 'gantt-today-dot'});
+			dot.setAttribute('title', `Today: ${todayStr()}`);
+		}
+
+		// ── 각 페이즈 렌더 ────────────────────────────────────────
+		for (const phase of phases) {
+			const tasks = this.plugin.settings.gantt.tasks[phase.id] ?? [];
+			const isEditing = this.ganttEditingPhaseId === phase.id;
+
+			// 사이드바: 페이즈 헤더
+			const sidePhaseHeader = sidebar.createDiv({cls: `gantt-phase-header gantt-accent-${phase.accent}`});
+			if (isEditing) {
+				const input = sidePhaseHeader.createEl('input', {
+					cls: 'gantt-phase-name-input',
+					attr: {type: 'text', value: phase.displayName},
+				});
+				const save = () => {
+					phase.displayName = input.value.trim() || phase.displayName;
+					this.ganttEditingPhaseId = null;
+					void this.plugin.saveSettings();
+					this.renderBoard();
+				};
+				input.addEventListener('keydown', (e: KeyboardEvent) => {
+					if (e.key === 'Enter') save();
+					if (e.key === 'Escape') { this.ganttEditingPhaseId = null; this.renderBoard(); }
+				});
+				input.addEventListener('blur', save);
+				setTimeout(() => input.select(), 0);
+			} else {
+				sidePhaseHeader.createSpan({text: phase.displayName, cls: 'gantt-phase-name'});
+				sidePhaseHeader.addEventListener('dblclick', () => {
+					this.ganttEditingPhaseId = phase.id;
+					this.renderBoard();
+				});
+			}
+
+			// 사이드바: 태스크 추가 버튼
+			const addTaskBtn = sidePhaseHeader.createSpan({cls: 'gantt-phase-add-btn', text: '+'});
+			addTaskBtn.setAttribute('title', `Add task to ${phase.displayName}`);
+			addTaskBtn.addEventListener('click', (e: MouseEvent) => {
+				e.stopPropagation();
+				this.ganttNewTaskPhaseId = phase.id;
+				this.ganttEditingPhaseId = null;
+				this.renderBoard();
+			});
+
+			// 바 영역: 페이즈 헤더 스페이서
+			const barPhaseHeader = barsArea.createDiv({cls: 'gantt-bar-phase-spacer'});
+			barPhaseHeader.style.height = '34px';
+
+			// 태스크 행 렌더
+			for (const task of tasks) {
+				this.renderGanttTaskRow(sidebar, barsArea, phase, task, range, pxPerDay);
+			}
+
+			// 신규 태스크 폼 (이 페이즈에만 표시)
+			if (this.ganttNewTaskPhaseId === phase.id) {
+				this.renderGanttNewTaskForm(sidebar, barsArea, phase);
+			}
+		}
+	}
+
+	private renderGanttHeader(wrapper: HTMLElement): void {
+		const header = wrapper.createDiv({cls: 'gantt-header'});
+
+		const leftArea = header.createDiv({cls: 'gantt-header-left'});
+		leftArea.createEl('h2', {text: 'Timeline / Gantt', cls: 'gantt-title'});
+
+		const rightArea = header.createDiv({cls: 'gantt-header-right'});
+
+		// 스케일 토글
+		const scaleToggle = rightArea.createDiv({cls: 'gantt-scale-toggle'});
+		const scales: Array<'daily' | 'weekly' | 'monthly'> = ['daily', 'weekly', 'monthly'];
+		const labels: Record<string, string> = {daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly'};
+		for (const s of scales) {
+			const btn = scaleToggle.createEl('button', {
+				text: labels[s],
+				cls: s === this.plugin.settings.ganttScale
+					? 'gantt-scale-btn gantt-scale-btn-active'
+					: 'gantt-scale-btn',
+			});
+			btn.addEventListener('click', () => {
+				this.plugin.settings.ganttScale = s;
+				void this.plugin.saveSettings();
+				this.renderBoard();
+			});
+		}
+
+		// New Task 버튼 (첫 번째 페이즈에 추가)
+		const newTaskBtn = rightArea.createEl('button', {text: '+ New Task', cls: 'gantt-new-task-btn'});
+		newTaskBtn.addEventListener('click', () => {
+			const firstPhase = this.plugin.settings.gantt.phases[0];
+			if (!firstPhase) return;
+			this.ganttNewTaskPhaseId = firstPhase.id;
+			this.ganttEditingTaskId  = null;
+			this.renderBoard();
+		});
+	}
+
+	private renderGanttTaskRow(
+		sidebar: HTMLElement,
+		barsArea: HTMLElement,
+		phase: GanttPhase,
+		task: GanttTask,
+		range: {start: string; end: string},
+		pxPerDay: number,
+	): void {
+		const isEditing = this.ganttEditingTaskId === task.id;
+
+		// 사이드바 행
+		const sideRow = sidebar.createDiv({cls: 'gantt-task-name-row'});
+		if (isEditing) {
+			this.renderGanttEditTaskForm(sideRow, barsArea, phase, task, range, pxPerDay);
+		} else {
+			sideRow.createSpan({text: task.title, cls: 'gantt-task-name-label'});
+			const pct = sideRow.createSpan({text: `${task.progress}%`, cls: 'gantt-task-pct'});
+			pct.style.opacity = task.progress > 0 ? '1' : '0';
+			sideRow.addEventListener('mouseenter', () => { pct.style.opacity = '1'; });
+			sideRow.addEventListener('mouseleave', () => { pct.style.opacity = task.progress > 0 ? '1' : '0'; });
+
+			const deleteBtn = sideRow.createSpan({text: '×', cls: 'gantt-task-delete-btn'});
+			deleteBtn.addEventListener('click', (e: MouseEvent) => {
+				e.stopPropagation();
+				void this.removeGanttTask(phase.id, task.id);
+			});
+
+			sideRow.addEventListener('dblclick', () => {
+				this.ganttEditingTaskId  = task.id;
+				this.ganttNewTaskPhaseId = null;
+				this.renderBoard();
+			});
+		}
+
+		// 타임라인 바 행
+		const barRow = barsArea.createDiv({cls: 'gantt-bar-row'});
+		barRow.style.height = '34px';
+
+		if (isEditing) return; // 편집 중엔 바 숨김
+
+		const leftPx  = Math.max(0, diffDays(range.start, task.startDate)) * pxPerDay;
+		const spanDays = Math.max(1, diffDays(task.startDate, task.endDate) + 1);
+		const widthPx = spanDays * pxPerDay;
+
+		const bar = barRow.createDiv({cls: `gantt-bar gantt-bar-${phase.accent}`});
+		bar.style.left  = `${leftPx}px`;
+		bar.style.width = `${widthPx}px`;
+
+		// 진행률 채움
+		if (task.progress > 0) {
+			const fill = bar.createDiv({cls: 'gantt-bar-fill'});
+			fill.style.width = `${task.progress}%`;
+		}
+
+		// 라벨
+		const label = bar.createDiv({cls: 'gantt-bar-label'});
+		if (task.status === 'done') {
+			label.setText(`Finished ${task.endDate}`);
+		} else if (task.progress > 0) {
+			label.setText(`In Progress (${task.progress}%)`);
+		} else {
+			label.setText(`${task.startDate} → ${task.endDate}`);
+		}
+
+		bar.addEventListener('dblclick', () => {
+			this.ganttEditingTaskId  = task.id;
+			this.ganttNewTaskPhaseId = null;
+			this.renderBoard();
+		});
+	}
+
+	private renderGanttNewTaskForm(sidebar: HTMLElement, barsArea: HTMLElement, phase: GanttPhase): void {
+		const today = todayStr();
+		const endDefault = addDaysStr(today, 13);
+
+		const formRow = sidebar.createDiv({cls: 'gantt-task-form-row'});
+		this.buildGanttTaskForm(formRow, phase, null, {
+			title: '',
+			startDate: today,
+			endDate: endDefault,
+			progress: 0,
+			status: 'planned',
+		});
+
+		// 바 영역에 스페이서
+		const spacer = barsArea.createDiv({cls: 'gantt-bar-row'});
+		spacer.style.height = '80px';
+	}
+
+	private renderGanttEditTaskForm(
+		container: HTMLElement,
+		barsArea: HTMLElement,
+		phase: GanttPhase,
+		task: GanttTask,
+		_range: {start: string; end: string},
+		_pxPerDay: number,
+	): void {
+		this.buildGanttTaskForm(container, phase, task, {
+			title:     task.title,
+			startDate: task.startDate,
+			endDate:   task.endDate,
+			progress:  task.progress,
+			status:    task.status,
+		});
+
+		// 바 영역에 스페이서 (편집 폼 높이 대응)
+		const spacer = barsArea.createDiv({cls: 'gantt-bar-row'});
+		spacer.style.height = '80px';
+	}
+
+	private buildGanttTaskForm(
+		container: HTMLElement,
+		phase: GanttPhase,
+		task: GanttTask | null,
+		defaults: {title: string; startDate: string; endDate: string; progress: number; status: GanttTaskStatus},
+	): void {
+		const form = container.createDiv({cls: 'gantt-task-form'});
+
+		const titleInput = form.createEl('input', {
+			cls: 'gantt-form-title',
+			attr: {type: 'text', placeholder: 'Task title', value: defaults.title},
+		});
+
+		const dateRow = form.createDiv({cls: 'gantt-form-dates'});
+		const startInput = dateRow.createEl('input', {
+			cls: 'gantt-form-date',
+			attr: {type: 'date', value: defaults.startDate, title: 'Start date'},
+		});
+		dateRow.createSpan({text: '→', cls: 'gantt-form-arrow'});
+		const endInput = dateRow.createEl('input', {
+			cls: 'gantt-form-date',
+			attr: {type: 'date', value: defaults.endDate, title: 'End date'},
+		});
+
+		const progressRow = form.createDiv({cls: 'gantt-form-progress-row'});
+		progressRow.createSpan({text: 'Progress:', cls: 'gantt-form-label'});
+		const progressInput = progressRow.createEl('input', {
+			cls: 'gantt-form-progress',
+			attr: {type: 'range', min: '0', max: '100', value: String(defaults.progress)},
+		});
+		const progressVal = progressRow.createSpan({text: `${defaults.progress}%`, cls: 'gantt-form-progress-val'});
+		progressInput.addEventListener('input', () => {
+			progressVal.setText(`${progressInput.value}%`);
+		});
+
+		const btnRow = form.createDiv({cls: 'gantt-form-btns'});
+		const saveBtn = btnRow.createEl('button', {text: '✓ Save', cls: 'gantt-form-save-btn'});
+		const cancelBtn = btnRow.createEl('button', {text: 'Cancel', cls: 'gantt-form-cancel-btn'});
+
+		const doSave = () => {
+			const title = titleInput.value.trim();
+			if (!title) { new Notice('Task title cannot be empty.'); return; }
+			const start = (startInput as HTMLInputElement).value;
+			const end   = (endInput as HTMLInputElement).value;
+			if (!start || !end) { new Notice('Please set both start and end dates.'); return; }
+			if (end < start) { new Notice('End date must be on or after start date.'); return; }
+			const progress = parseInt((progressInput as HTMLInputElement).value, 10);
+			const status: GanttTaskStatus = progress >= 100 ? 'done' : progress > 0 ? 'in-progress' : 'planned';
+
+			if (task) {
+				void this.updateGanttTask(phase.id, task.id, {title, startDate: start, endDate: end, progress, status});
+			} else {
+				void this.addGanttTask(phase.id, {title, startDate: start, endDate: end, progress, status});
+			}
+		};
+
+		saveBtn.addEventListener('click', doSave);
+		titleInput.addEventListener('keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter') doSave();
+			if (e.key === 'Escape') { this.ganttEditingTaskId = null; this.ganttNewTaskPhaseId = null; this.renderBoard(); }
+		});
+		cancelBtn.addEventListener('click', () => {
+			this.ganttEditingTaskId  = null;
+			this.ganttNewTaskPhaseId = null;
+			this.renderBoard();
+		});
+
+		setTimeout(() => titleInput.focus(), 0);
+	}
+
+	// ── 타임라인 헤더 렌더 ───────────────────────────────────────────
+
+	private renderMonthlyHeader(
+		monthRow: HTMLElement, weekRow: HTMLElement,
+		range: {start: string; end: string}, pxPerDay: number, _totalDays: number,
+	): void {
+		let cur = getMonthStart(range.start);
+		while (cur <= range.end) {
+			const nextMonth = getNextMonthStart(cur);
+			const days = Math.min(diffDays(cur, nextMonth), diffDays(cur, range.end) + 1);
+			const w = days * pxPerDay;
+
+			const cell = monthRow.createDiv({cls: 'gantt-th-cell'});
+			cell.style.width = `${w}px`;
+			cell.setText(formatMonthLabel(cur));
+
+			// 서브헤더: 주차
+			let wCur = getMonday(cur < range.start ? range.start : cur);
+			while (wCur <= nextMonth && wCur <= range.end) {
+				const wEnd = addDaysStr(wCur, 6);
+				const wDays = diffDays(wCur < range.start ? range.start : wCur, wEnd > range.end ? range.end : wEnd) + 1;
+				const ww = wDays * pxPerDay;
+				const sub = weekRow.createDiv({cls: 'gantt-th-sub'});
+				sub.style.width = `${Math.max(ww, 1)}px`;
+				sub.setText(`W${getWeekNumber(wCur)}`);
+				wCur = addDaysStr(wCur, 7);
+			}
+
+			cur = nextMonth;
+		}
+	}
+
+	private renderWeeklyHeader(
+		monthRow: HTMLElement, weekRow: HTMLElement,
+		range: {start: string; end: string}, pxPerDay: number, totalDays: number,
+	): void {
+		// 월 헤더
+		let cur = getMonthStart(range.start);
+		while (cur <= range.end) {
+			const nextMonth = getNextMonthStart(cur);
+			const startClamped = cur < range.start ? range.start : cur;
+			const endClamped = nextMonth > addDaysStr(range.end, 1) ? range.end : addDaysStr(nextMonth, -1);
+			const days = diffDays(startClamped, endClamped) + 1;
+			const cell = monthRow.createDiv({cls: 'gantt-th-cell'});
+			cell.style.width = `${days * pxPerDay}px`;
+			cell.setText(formatMonthLabel(cur));
+			cur = nextMonth;
+		}
+
+		// 주 서브헤더
+		let wCur = getMonday(range.start);
+		while (wCur <= range.end) {
+			const wEnd = addDaysStr(wCur, 6);
+			const startClamped = wCur < range.start ? range.start : wCur;
+			const endClamped   = wEnd > range.end ? range.end : wEnd;
+			const days = diffDays(startClamped, endClamped) + 1;
+			const sub = weekRow.createDiv({cls: 'gantt-th-sub'});
+			sub.style.width = `${days * pxPerDay}px`;
+			sub.setText(`W${getWeekNumber(wCur)}`);
+			wCur = addDaysStr(wCur, 7);
+		}
+
+		void totalDays;
+	}
+
+	private renderDailyHeader(
+		monthRow: HTMLElement, weekRow: HTMLElement,
+		range: {start: string; end: string}, pxPerDay: number, _totalDays: number,
+	): void {
+		// 월 헤더
+		let cur = getMonthStart(range.start);
+		while (cur <= range.end) {
+			const nextMonth = getNextMonthStart(cur);
+			const startClamped = cur < range.start ? range.start : cur;
+			const endClamped   = nextMonth > addDaysStr(range.end, 1) ? range.end : addDaysStr(nextMonth, -1);
+			const days = diffDays(startClamped, endClamped) + 1;
+			const cell = monthRow.createDiv({cls: 'gantt-th-cell'});
+			cell.style.width = `${days * pxPerDay}px`;
+			cell.setText(formatMonthLabel(cur));
+			cur = nextMonth;
+		}
+
+		// 일 서브헤더
+		let dCur = range.start;
+		while (dCur <= range.end) {
+			const sub = weekRow.createDiv({cls: 'gantt-th-sub'});
+			sub.style.width = `${pxPerDay}px`;
+			sub.setText(formatDayLabel(dCur));
+			dCur = addDaysStr(dCur, 1);
+		}
+	}
+
+	// ── 날짜 범위 계산 ────────────────────────────────────────────────
+
+	private computeGanttDateRange(): {start: string; end: string} {
+		const allTasks = this.plugin.settings.gantt.phases.flatMap(
+			p => this.plugin.settings.gantt.tasks[p.id] ?? []
+		);
+		if (allTasks.length === 0) {
+			const today = todayStr();
+			return {start: addDaysStr(today, -14), end: addDaysStr(today, 60)};
+		}
+		const starts = allTasks.map(t => t.startDate).sort();
+		const ends   = allTasks.map(t => t.endDate).sort();
+		const minStart = addDaysStr(starts[0]!, -7);
+		const maxEnd   = addDaysStr(ends[ends.length - 1]!, 14);
+		return {start: minStart, end: maxEnd};
+	}
+
+	// ═══════════════════════════════════════════════════════════════════
 	// 공통 유틸
 	// ═══════════════════════════════════════════════════════════════════
 
@@ -575,24 +1102,12 @@ export class KanbanView extends ItemView {
 			.forEach(el => el.classList.remove('ref-tab-drag-before', 'ref-tab-drag-after'));
 	}
 
-	/**
-	 * 드래그 이벤트에서 노트 제목 배열을 추출한다.
-	 *
-	 * Obsidian 파일 탐색기는 드래그 데이터를 여러 형태로 보낸다:
-	 *   1) obsidian://open?vault=...&file=... URI (단일 또는 다중)
-	 *   2) [[제목1]]\n[[제목2]] 형태의 위키링크 목록
-	 *   3) 일반 텍스트(plain text)
-	 *
-	 * 단일·다중 선택 모두 개별 노트 제목 배열로 반환한다.
-	 */
 	private extractNoteTitlesFromDrop(e: DragEvent): string[] {
 		const dt = e.dataTransfer;
 		if (!dt) return [];
 
 		const textData = dt.getData('text/plain');
 		if (textData) {
-			// ① obsidian:// URI를 텍스트 어디서든 전부 추출
-			//    (제목 텍스트 뒤에 URI가 바로 붙는 경우도 처리)
 			const uriMatches = [...textData.matchAll(/obsidian:\/\/open\?[^\s\n]*/g)];
 			if (uriMatches.length > 0) {
 				const titles: string[] = [];
@@ -609,7 +1124,6 @@ export class KanbanView extends ItemView {
 				if (titles.length > 0) return titles;
 			}
 
-			// ② [[제목]] 위키링크 패턴 (다중 선택 드래그)
 			const wikiMatches = [...textData.matchAll(/\[\[([^\]]+)\]\]/g)];
 			if (wikiMatches.length > 0) {
 				return wikiMatches
@@ -617,7 +1131,6 @@ export class KanbanView extends ItemView {
 					.filter(Boolean);
 			}
 
-			// ③ 폴백: 줄 단위로 분리 후 URI가 아닌 텍스트만 수집
 			const titles = textData.split(/\r?\n/)
 				.map(line => line.trim())
 				.filter(line => line && !line.startsWith('obsidian://'))
@@ -626,7 +1139,6 @@ export class KanbanView extends ItemView {
 			return titles;
 		}
 
-		// Windows 탐색기에서 파일 드래그
 		if (dt.files?.length) {
 			return Array.from(dt.files)
 				.map(f => f.name.replace(/\.md$/i, '').trim())
@@ -742,6 +1254,39 @@ export class KanbanView extends ItemView {
 		if (idx !== -1) items.splice(idx, 1);
 		await this.plugin.saveSettings(); this.renderBoard();
 	}
+
+	// ═══════════════════════════════════════════════════════════════════
+	// 간트 데이터 조작
+	// ═══════════════════════════════════════════════════════════════════
+
+	private async addGanttTask(phaseId: string, data: Omit<GanttTask, 'id'>): Promise<void> {
+		const tasks = this.plugin.settings.gantt.tasks[phaseId] ?? [];
+		this.plugin.settings.gantt.tasks[phaseId] = tasks;
+		tasks.push({id: generateId(), ...data});
+		this.ganttNewTaskPhaseId = null;
+		await this.plugin.saveSettings();
+		this.renderBoard();
+	}
+
+	private async updateGanttTask(phaseId: string, taskId: string, patch: Partial<GanttTask>): Promise<void> {
+		const tasks = this.plugin.settings.gantt.tasks[phaseId];
+		if (!tasks) return;
+		const t = tasks.find(t => t.id === taskId);
+		if (!t) return;
+		Object.assign(t, patch);
+		this.ganttEditingTaskId = null;
+		await this.plugin.saveSettings();
+		this.renderBoard();
+	}
+
+	private async removeGanttTask(phaseId: string, taskId: string): Promise<void> {
+		const tasks = this.plugin.settings.gantt.tasks[phaseId];
+		if (!tasks) return;
+		const idx = tasks.findIndex(t => t.id === taskId);
+		if (idx !== -1) tasks.splice(idx, 1);
+		await this.plugin.saveSettings();
+		this.renderBoard();
+	}
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -754,8 +1299,8 @@ class ConfirmDeleteTabModal extends Modal {
 
 	constructor(app: App, tabName: string, onConfirm: () => void) {
 		super(app);
-		this.tabName     = tabName;
-		this.onConfirm   = onConfirm;
+		this.tabName   = tabName;
+		this.onConfirm = onConfirm;
 	}
 
 	onOpen() {
