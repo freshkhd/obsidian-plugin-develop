@@ -161,9 +161,8 @@ export class DashboardView extends ItemView {
 		const current = this.plugin.settings.lastActiveView;
 
 		const navItems: Array<{id: DashboardViewKind; icon: string; label: string}> = [
-			{id: 'story',     icon: '📖', label: 'Story'},
-			{id: 'gantt',     icon: '📊', label: 'Task Tracking'},
-			{id: 'character', icon: '👤', label: 'Character'},
+			{id: 'story', icon: '📖', label: 'Story'},
+			{id: 'gantt', icon: '📊', label: 'Task Tracking'},
 		];
 
 		for (const ni of navItems) {
