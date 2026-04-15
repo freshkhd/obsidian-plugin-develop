@@ -154,7 +154,7 @@ export class DashboardView extends ItemView {
 		const header = nav.createDiv({cls: 'dashboard-nav-header'});
 		header.createDiv({cls: 'dashboard-nav-logo', text: '🎬'});
 		const hText = header.createDiv({cls: 'dashboard-nav-header-text'});
-		hText.createDiv({cls: 'dashboard-nav-title', text: 'Animation Project'});
+		hText.createDiv({cls: 'dashboard-nav-title', text: 'Animated Project'});
 		hText.createDiv({cls: 'dashboard-nav-subtitle', text: 'Dashboard'});
 
 		const items = nav.createDiv({cls: 'dashboard-nav-items'});
@@ -162,7 +162,7 @@ export class DashboardView extends ItemView {
 
 		const navItems: Array<{id: DashboardViewKind; icon: string; label: string}> = [
 			{id: 'story',     icon: '📖', label: 'Story'},
-			{id: 'gantt',     icon: '📊', label: 'Timeline/Gantt'},
+			{id: 'gantt',     icon: '📊', label: 'Task Tracking'},
 			{id: 'character', icon: '👤', label: 'Character'},
 		];
 
@@ -1284,7 +1284,7 @@ export class DashboardView extends ItemView {
 	): void {
 		const isEditing = this.ganttEditingTaskId === task.id;
 
-		// 편집 중: gantt-task-name-row(height:34px) 대신 form-row 컨테이너 사용
+		// 편집 중: height:34px 고정인 gantt-task-name-row 대신 전용 컨테이너 사용
 		if (isEditing) {
 			const formRow = sidebar.createDiv({cls: 'gantt-task-form-row'});
 			this.renderGanttEditTaskForm(formRow, barsArea, phase, task, range, pxPerDay);
